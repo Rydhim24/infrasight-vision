@@ -1,7 +1,17 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from ocr import extract_text
+import os
+from dotenv import load_dotenv
 
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path) # Force loading exactly from backend/.env
+
+# Debug check to print if key is missing (safe to log missing status)
+if not os.getenv("GEMINI_API_KEY"):
+    print("WARNING: GEMINI_API_KEY is missing or the .env file is empty/unsaved!")
+
+from vision_service import extract_infrastructure_graph
+from analytics_service import generate_insights
 
 app = FastAPI()
 
@@ -13,42 +23,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-import os
-
 UPLOAD_FOLDER = "uploads"
-
-os.makedirs(
-    UPLOAD_FOLDER,
-    exist_ok=True
-)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.get("/")
 def home():
-    return {"message": "GreenOps AI Backend Running"}
+    return {
+        "message": "InfraSight AI Backend Running"
+    }
 
-from fastapi import UploadFile, File
-
-
-
-
-@app.post("/upload")
-async def upload(
-    file: UploadFile = File(...)
-):
-    file_path = os.path.join(
-        UPLOAD_FOLDER,
-        file.filename
-    )
+@app.post("/analyze")
+async def analyze_diagram(file: UploadFile = File(...)):
+    """
+    Endpoint that handles the full pipeline:
+    1. Save uploaded image
+    2. Extract structural graph using Gemini Vision
+    3. Generate architectural insights based on the graph
+    """
+    file_path = os.path.join(UPLOAD_FOLDER, file.filename)
 
     with open(file_path, "wb") as buffer:
-        buffer.write(
-            await file.read()
-        )
+        buffer.write(await file.read())
 
-    extracted_text = extract_text(file_path)
+    # Step 1: Vision Extraction
+    graph_result = extract_infrastructure_graph(file_path)
+    
+    if "error" in graph_result:
+        raise HTTPException(status_code=500, detail=graph_result["error"])
 
+    # Step 2: Insight Generation
+    insights = generate_insights(graph_result)
+    
+    if "error" in insights:
+        raise HTTPException(status_code=500, detail=insights["error"])
+
+    # Provide unified response
     return {
         "filename": file.filename,
-        "text": extracted_text,
+        "graph": graph_result,
+        "insights": insights,
         "saved_to": file_path
     }
